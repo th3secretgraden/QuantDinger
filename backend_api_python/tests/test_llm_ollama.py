@@ -68,3 +68,18 @@ def test_indicator_ai_generation_allows_ollama_without_api_key():
         LLMProvider.OPENAI,
         "https://api.openai.com/v1",
     )
+
+
+def test_strategy_ai_generation_allows_ollama_without_api_key():
+    from app.routes.strategy import _llm_provider_can_run_without_api_key
+    from app.services.llm import LLMProvider
+
+    assert _llm_provider_can_run_without_api_key(
+        LLMProvider.OLLAMA,
+        "http://host.docker.internal:11434",
+    )
+    assert not _llm_provider_can_run_without_api_key(LLMProvider.OLLAMA, "")
+    assert not _llm_provider_can_run_without_api_key(
+        LLMProvider.OPENAI,
+        "https://api.openai.com/v1",
+    )

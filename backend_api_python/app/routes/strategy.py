@@ -28,6 +28,13 @@ logger = get_logger(__name__)
 strategy_bp = Blueprint('strategy', __name__)
 
 
+def _llm_provider_can_run_without_api_key(provider: object, base_url: str) -> bool:
+    """Return whether the selected LLM provider can be called without an API key."""
+    provider_value = getattr(provider, "value", provider)
+    provider_value = str(provider_value or "").strip().lower()
+    return provider_value in {"ollama", "custom"} and bool((base_url or "").strip())
+
+
 def _normalize_trade_row_for_api(trade: dict) -> dict:
     """Ensure numeric fields are JSON-friendly floats (PostgreSQL DECIMAL → float)."""
     try:
@@ -1536,8 +1543,10 @@ def ai_generate_strategy():
         intent = (payload.get('intent') or 'generate_code').strip()
         from app.services.llm import LLMService
         llm = LLMService()
-        api_key = llm.get_api_key()
-        if not api_key:
+        current_provider = llm.provider
+        base_url = llm.get_base_url(current_provider)
+        api_key = llm.get_api_key(current_provider)
+        if not api_key and not _llm_provider_can_run_without_api_key(current_provider, base_url):
             return jsonify({'code': '', 'msg': _strategy_ai_text('no_llm_key', lang), 'params': None})
 
         from app.services.billing_service import get_billing_service
