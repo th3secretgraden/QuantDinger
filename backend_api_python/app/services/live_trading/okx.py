@@ -31,7 +31,7 @@ class OkxClient(BaseRestClient):
         api_key: str,
         secret_key: str,
         passphrase: str,
-        base_url: str = "https://www.okx.com",
+        base_url: str = "https://my.okx.com",
         timeout_sec: float = 15.0,
         broker_code: Optional[str] = None,
         simulated_trading: bool = False,

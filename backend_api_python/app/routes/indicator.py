@@ -31,6 +31,13 @@ logger = get_logger(__name__)
 indicator_bp = Blueprint("indicator", __name__)
 
 
+def _llm_provider_can_run_without_api_key(provider: Any, base_url: str) -> bool:
+    """Return whether the selected LLM provider can be called without an API key."""
+    provider_value = getattr(provider, "value", provider)
+    provider_value = str(provider_value or "").strip().lower()
+    return provider_value in {"ollama", "custom"} and bool((base_url or "").strip())
+
+
 def _now_ts() -> int:
     return int(time.time())
 
@@ -930,9 +937,9 @@ Return **only** valid Python source: **no** markdown fences, **no** ` ``` `, **n
         
         logger.info(f"AI Code Generation - Provider: {current_provider.value}, Model: {current_model}, Base URL: {base_url}, API Key configured: {bool(current_api_key)}")
         
-        # Check if any LLM provider is configured
-        if not current_api_key:
-            logger.warning("No LLM API key configured, using template code")
+        # Ollama and keyless custom gateways are valid when a base URL is configured.
+        if not current_api_key and not _llm_provider_can_run_without_api_key(current_provider, base_url):
+            logger.warning("No LLM API key configured for provider %s, using template code", current_provider.value)
             return _template_code()
 
         # Build user prompt (match PHP behavior)

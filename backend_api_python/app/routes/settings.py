@@ -131,6 +131,7 @@ CONFIG_SCHEMA = {
                     {'value': 'google', 'label': 'Google Gemini'},
                     {'value': 'deepseek', 'label': 'DeepSeek'},
                     {'value': 'grok', 'label': 'xAI Grok'},
+                    {'value': 'ollama', 'label': 'Ollama (Local)'},
                     {'value': 'custom', 'label': 'Custom API (OpenAI-compatible)'},
                     {'value': 'minimax', 'label': 'MiniMax'},
                 ],
@@ -265,13 +266,41 @@ CONFIG_SCHEMA = {
                 'description': 'xAI Grok API endpoint',
                 'group': 'grok'
             },
+            # Ollama
+            {
+                'key': 'OLLAMA_BASE_URL',
+                'label': 'Ollama Base URL',
+                'type': 'text',
+                'default': 'http://host.docker.internal:11434',
+                'required': False,
+                'description': 'Ollama server root. Docker backend: http://host.docker.internal:11434. Direct local backend: http://127.0.0.1:11434',
+                'group': 'ollama'
+            },
+            {
+                'key': 'OLLAMA_MODEL',
+                'label': 'Ollama Model',
+                'type': 'text',
+                'default': 'llama3.2',
+                'required': False,
+                'description': 'Installed Ollama model name (e.g. qwen3:8b, gemma3, llama3.2)',
+                'group': 'ollama'
+            },
+            {
+                'key': 'OLLAMA_TIMEOUT',
+                'label': 'Ollama Timeout',
+                'type': 'number',
+                'default': 120,
+                'required': False,
+                'description': 'Request timeout in seconds',
+                'group': 'ollama'
+            },
             # Custom API (OpenAI-compatible)
             {
                 'key': 'CUSTOM_API_URL',
                 'label': 'Custom API URL',
                 'type': 'text',
                 'default': '',
-                'description': 'Your custom API endpoint (OpenAI-compatible, e.g. https://api.example.com/v1)',
+                'description': 'OpenAI-compatible custom endpoint, e.g. https://api.example.com/v1. Use the Ollama provider for local Ollama.',
                 'group': 'custom'
             },
             {
@@ -279,7 +308,7 @@ CONFIG_SCHEMA = {
                 'label': 'Custom API Key',
                 'type': 'password',
                 'required': False,
-                'description': 'API key for your custom endpoint. Leave empty for local OpenAI-compatible servers without auth (e.g. Ollama on localhost)',
+                'description': 'API key for your OpenAI-compatible custom endpoint',
                 'group': 'custom'
             },
             {
@@ -287,7 +316,7 @@ CONFIG_SCHEMA = {
                 'label': 'Custom Model',
                 'type': 'text',
                 'default': '',
-                'description': 'Model name to use (e.g. gpt-4o, claude-3-opus)',
+                'description': 'Model name to use from your custom provider config (e.g. qwen3:8b, gemma3, gpt-4o)',
                 'group': 'custom'
             },
             # MiniMax

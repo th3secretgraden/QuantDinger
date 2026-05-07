@@ -1,6 +1,6 @@
 """
 LLM service.
-Supports multiple providers: OpenRouter, OpenAI, Google Gemini, DeepSeek, Grok, Custom (OpenAI-compatible), MiniMax.
+Supports multiple providers: OpenRouter, OpenAI, Google Gemini, DeepSeek, Grok, Ollama, Custom (OpenAI-compatible), MiniMax.
 Kept separate from AnalysisService to avoid circular imports.
 """
 import json
@@ -8,6 +8,7 @@ import os
 import requests
 from typing import Dict, Any, Optional, List
 from enum import Enum
+from urllib.parse import urlparse, urlunparse
 
 from app.utils.logger import get_logger
 from app.config import APIKeys
@@ -23,6 +24,7 @@ class LLMProvider(Enum):
     GOOGLE = "google"
     DEEPSEEK = "deepseek"
     GROK = "grok"
+    OLLAMA = "ollama"
     CUSTOM = "custom"
     MINIMAX = "minimax"
 
@@ -54,6 +56,11 @@ PROVIDER_CONFIGS = {
         "default_model": "grok-beta",
         "fallback_model": "grok-beta",
     },
+    LLMProvider.OLLAMA: {
+        "base_url": "http://host.docker.internal:11434",
+        "default_model": "llama3.2",
+        "fallback_model": "",
+    },
     LLMProvider.CUSTOM: {
         "base_url": "",  # User configured via CUSTOM_API_URL
         "default_model": "",  # User configured via CUSTOM_MODEL
@@ -75,7 +82,7 @@ class LLMService:
         Initialize LLM service.
 
         Args:
-            provider: Override the default provider (openrouter, openai, google, deepseek, grok, custom, minimax)
+            provider: Override the default provider (openrouter, openai, google, deepseek, grok, ollama, custom, minimax)
         """
         self._provider_override = provider
 
@@ -130,6 +137,7 @@ class LLMService:
             LLMProvider.GOOGLE: APIKeys.GOOGLE_API_KEY,
             LLMProvider.DEEPSEEK: APIKeys.DEEPSEEK_API_KEY,
             LLMProvider.GROK: APIKeys.GROK_API_KEY,
+            LLMProvider.OLLAMA: "",
             LLMProvider.CUSTOM: APIKeys.CUSTOM_API_KEY,
             LLMProvider.MINIMAX: APIKeys.MINIMAX_API_KEY,
         }
@@ -246,6 +254,83 @@ class LLMService:
         else:
             raise ValueError("API response is missing 'choices'")
 
+    def _ollama_generate_url(self, base_url: str) -> str:
+        """Build the native Ollama generate endpoint from a root, /v1, or endpoint URL."""
+        parsed = urlparse((base_url or "").rstrip("/"))
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/api/generate"):
+            return urlunparse(parsed)
+        if path.endswith("/api/chat"):
+            path = path[: -len("/api/chat")]
+        elif path.endswith("/v1"):
+            path = path[: -len("/v1")]
+        path = f"{path}/api/generate" if path else "/api/generate"
+        return urlunparse(parsed._replace(path=path))
+
+    def _messages_to_ollama_prompt(self, messages: list) -> str:
+        """Convert chat messages to a prompt for Ollama /api/generate."""
+        parts = []
+        for msg in messages or []:
+            role = str(msg.get("role") or "user").strip().lower()
+            content = str(msg.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "system":
+                parts.append(f"System:\n{content}")
+            elif role == "assistant":
+                parts.append(f"Assistant:\n{content}")
+            else:
+                parts.append(f"User:\n{content}")
+        return "\n\n".join(parts)
+
+    def _call_ollama_generate(self, messages: list, model: str, temperature: float,
+                              base_url: str, timeout: int,
+                              use_json_mode: bool = True) -> str:
+        """Call Ollama's native /api/generate endpoint."""
+        url = self._ollama_generate_url(base_url)
+        data = {
+            "model": model,
+            "prompt": self._messages_to_ollama_prompt(messages),
+            "stream": False,
+            "options": {"temperature": temperature},
+        }
+
+        if use_json_mode:
+            data["format"] = "json"
+
+        try:
+            response = requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=data,
+                timeout=timeout,
+            )
+        except requests.exceptions.ConnectionError as e:
+            raise ValueError(
+                f"Cannot connect to Ollama at {url}. If the backend runs in Docker, set "
+                "OLLAMA_BASE_URL=http://host.docker.internal:11434 and make sure Ollama is "
+                "running on the host. If the backend runs directly on the host, use "
+                "OLLAMA_BASE_URL=http://127.0.0.1:11434."
+            ) from e
+
+        if response.status_code >= 400:
+            err_text = ""
+            try:
+                error_data = response.json() or {}
+                err_text = str(error_data.get("error") or "").strip()
+            except Exception:
+                err_text = (response.text or "").strip()[:300]
+            error_msg = f"Ollama API {response.status_code}"
+            if err_text:
+                error_msg = f"{error_msg}: {err_text}"
+            raise ValueError(error_msg)
+
+        result = response.json()
+        content = str(result.get("response") or "").strip()
+        if not content:
+            raise ValueError(f"Ollama model {model} returned empty content")
+        return content
+
     def _call_google_gemini(self, messages: list, model: str, temperature: float,
                            api_key: str, base_url: str, timeout: int) -> str:
         """Call Google Gemini API."""
@@ -325,6 +410,7 @@ class LLMService:
                 'deepseek': LLMProvider.DEEPSEEK,
                 'x-ai': LLMProvider.GROK,
                 'xai': LLMProvider.GROK,
+                'ollama': LLMProvider.OLLAMA,
                 'minimax': LLMProvider.MINIMAX,
             }
             
@@ -357,6 +443,7 @@ class LLMService:
             'deepseek': LLMProvider.DEEPSEEK,
             'x-ai': LLMProvider.GROK,
             'xai': LLMProvider.GROK,
+            'ollama': LLMProvider.OLLAMA,
             'minimax': LLMProvider.MINIMAX,
             'anthropic': LLMProvider.OPENROUTER,  # Anthropic only via OpenRouter
             'meta': LLMProvider.OPENROUTER,  # Meta/Llama only via OpenRouter
@@ -394,7 +481,7 @@ class LLMService:
             detected_provider = self._detect_provider_from_model(model)
             if detected_provider and detected_provider != LLMProvider.OPENROUTER:
                 # Check if we have API key for the detected provider
-                if self.get_api_key(detected_provider):
+                if detected_provider == LLMProvider.OLLAMA or self.get_api_key(detected_provider):
                     provider = detected_provider
                     logger.debug(f"Auto-detected provider '{provider.value}' from model '{model}'")
         
@@ -409,12 +496,18 @@ class LLMService:
                 explicit_provider = None
         api_key = (self.get_api_key(p) or "").strip()
         base_url = (self.get_base_url(p) or "").strip()
-        # Local OpenAI-compatible servers (e.g. Ollama) often use no API key when base_url is set.
-        custom_ok_without_key = p == LLMProvider.CUSTOM and bool(base_url)
+        # Local Ollama and some custom gateways can run without API keys when a base URL is set.
+        provider_ok_without_key = p in {LLMProvider.OLLAMA, LLMProvider.CUSTOM} and bool(base_url)
 
-        if not api_key and not custom_ok_without_key:
+        if not api_key and not provider_ok_without_key:
             # If provider is explicitly configured by user, don't silently switch.
             if explicit_provider is not None and p == explicit_provider:
+                if p == LLMProvider.OLLAMA:
+                    raise ValueError(
+                        "Ollama provider selected but OLLAMA_BASE_URL is not configured. "
+                        "For Docker, use http://host.docker.internal:11434. "
+                        "For direct local backend runs, use http://127.0.0.1:11434."
+                    )
                 if p == LLMProvider.CUSTOM:
                     raise ValueError(
                         "已选择自定义 OpenAI 兼容接口：请配置 CUSTOM_API_URL（例如本机 Ollama："
@@ -432,11 +525,17 @@ class LLMService:
                         p = alt_provider
                         api_key = (self.get_api_key(p) or "").strip()
                         base_url = (self.get_base_url(p) or "").strip()
-                        custom_ok_without_key = p == LLMProvider.CUSTOM and bool(base_url)
+                        provider_ok_without_key = p in {LLMProvider.OLLAMA, LLMProvider.CUSTOM} and bool(base_url)
                         break
             
-            if not api_key and not custom_ok_without_key:
+            if not api_key and not provider_ok_without_key:
                 raise ValueError(f"API key not configured for provider: {p.value}. Please configure at least one LLM provider API key.")
+
+        if p == LLMProvider.OLLAMA and not base_url:
+            raise ValueError(
+                "Ollama base URL is not configured. Set OLLAMA_BASE_URL to "
+                "http://host.docker.internal:11434 for Docker or http://127.0.0.1:11434 for direct local runs."
+            )
 
         if p == LLMProvider.CUSTOM and not base_url:
             raise ValueError(
@@ -468,6 +567,12 @@ class LLMService:
                     return self._call_google_gemini(
                         messages, current_model, temperature,
                         api_key, base_url, timeout
+                    )
+                elif p == LLMProvider.OLLAMA:
+                    return self._call_ollama_generate(
+                        messages, current_model, temperature,
+                        base_url, timeout,
+                        use_json_mode=use_json_mode
                     )
                 else:
                     # OpenAI-compatible providers

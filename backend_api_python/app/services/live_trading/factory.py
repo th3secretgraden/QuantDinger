@@ -148,7 +148,7 @@ def create_client(exchange_config: Dict[str, Any], *, market_type: str = "swap")
         base_url = _get(exchange_config, "base_url", "baseUrl") or default_url
         return BinanceFuturesClient(api_key=api_key, secret_key=secret_key, base_url=base_url, enable_demo_trading=is_demo, broker_id=futures_broker_id)
     if exchange_id == "okx":
-        base_url = _get(exchange_config, "base_url", "baseUrl") or "https://www.okx.com"
+        base_url = _get(exchange_config, "base_url", "baseUrl") or "https://my.okx.com"
         broker_code = "56fa80b0ce8cBCDE"
         return OkxClient(
             api_key=api_key,
