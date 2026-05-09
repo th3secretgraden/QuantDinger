@@ -298,20 +298,7 @@ class LLMService:
         if use_json_mode:
             data["format"] = "json"
 
-        try:
-            response = requests.post(
-                url,
-                headers={"Content-Type": "application/json"},
-                json=data,
-                timeout=timeout,
-            )
-        except requests.exceptions.ConnectionError as e:
-            raise ValueError(
-                f"Cannot connect to Ollama at {url}. If the backend runs in Docker, set "
-                "OLLAMA_BASE_URL=http://host.docker.internal:11434 and make sure Ollama is "
-                "running on the host. If the backend runs directly on the host, use "
-                "OLLAMA_BASE_URL=http://127.0.0.1:11434."
-            ) from e
+        response = self._post_ollama_generate(url, data, timeout)
 
         if response.status_code >= 400:
             err_text = ""
@@ -326,10 +313,62 @@ class LLMService:
             raise ValueError(error_msg)
 
         result = response.json()
-        content = str(result.get("response") or "").strip()
+        content = self._extract_ollama_content(result)
+        if not content and use_json_mode:
+            logger.warning(
+                "Ollama model %s returned empty content with JSON mode; retrying without JSON mode",
+                model,
+            )
+            retry_data = dict(data)
+            retry_data.pop("format", None)
+            retry_response = self._post_ollama_generate(url, retry_data, timeout)
+            if retry_response.status_code >= 400:
+                err_text = ""
+                try:
+                    error_data = retry_response.json() or {}
+                    err_text = str(error_data.get("error") or "").strip()
+                except Exception:
+                    err_text = (retry_response.text or "").strip()[:300]
+                error_msg = f"Ollama API {retry_response.status_code}"
+                if err_text:
+                    error_msg = f"{error_msg}: {err_text}"
+                raise ValueError(error_msg)
+            result = retry_response.json()
+            content = self._extract_ollama_content(result)
         if not content:
             raise ValueError(f"Ollama model {model} returned empty content")
         return content
+
+    def _post_ollama_generate(self, url: str, data: Dict[str, Any], timeout: int):
+        """Post to Ollama and normalize connection errors."""
+        try:
+            return requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json=data,
+                timeout=timeout,
+            )
+        except requests.exceptions.ConnectionError as e:
+            raise ValueError(
+                f"Cannot connect to Ollama at {url}. If the backend runs in Docker, set "
+                "OLLAMA_BASE_URL=http://host.docker.internal:11434 and make sure Ollama is "
+                "running on the host. If the backend runs directly on the host, use "
+                "OLLAMA_BASE_URL=http://127.0.0.1:11434."
+            ) from e
+
+    def _extract_ollama_content(self, result: Dict[str, Any]) -> str:
+        """Extract text from native Ollama responses and compatible variants."""
+        content = str(result.get("response") or "").strip()
+        if content:
+            return content
+
+        message = result.get("message")
+        if isinstance(message, dict):
+            content = str(message.get("content") or "").strip()
+            if content:
+                return content
+
+        return str(result.get("content") or "").strip()
 
     def _call_google_gemini(self, messages: list, model: str, temperature: float,
                            api_key: str, base_url: str, timeout: int) -> str:
